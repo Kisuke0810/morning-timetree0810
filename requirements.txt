@@ -1,4 +1,0 @@
-timetree-exporter==0.6.1
-icalendar==5.0.12
-requests==2.32.3
-pytz==2024.2
