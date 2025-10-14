@@ -1,88 +1,38 @@
-name: Morning TimeTree Notify
-
+name: Morning TimeTree → LINE
 on:
   schedule:
-    # UTC 00:00 = JST 09:00
+    # 毎朝 9:00 JST（= 0:00 UTC）
     - cron: "0 0 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+      - name: Install deps
+        run: pip install -r requirements.txt
 
       - name: Export TimeTree to ICS
         env:
           TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
           TIMETREE_PASSWORD: ${{ secrets.TIMETREE_PASSWORD }}
-          TIMETREE_CAL_CODE: ${{ secrets.TIMETREE_CAL_CODE }}
+          TIMETREE_CAL_CODE: ${{ secrets.TIMETREE_CAL_CODE }} # 任意
         run: |
-          set -eux
           mkdir -p data
-          python - <<'PY'
-          import os, subprocess, sys, pathlib
-          out = pathlib.Path('data/timetree.ics')
-          email = os.environ['TIMETREE_EMAIL']
-          password = os.environ['TIMETREE_PASSWORD']
-          cal_code = os.environ.get('TIMETREE_CAL_CODE')
+          if [ -n "${TIMETREE_CAL_CODE}" ]; then
+            timetree-exporter -o data/timetree.ics -e "${TIMETREE_EMAIL}" -c "${TIMETREE_CAL_CODE}" <<< "${TIMETREE_PASSWORD}"
+          else
+            timetree-exporter -o data/timetree.ics -e "${TIMETREE_EMAIL}" <<< "${TIMETREE_PASSWORD}"
+          fi
 
-          def try_run(cmd):
-            print('Running:', ' '.join(cmd))
-            try:
-              subprocess.check_call(cmd)
-              return True
-            except Exception as e:
-              print('Failed:', e, file=sys.stderr)
-              return False
-
-          tried = False
-          # Try CLI
-          base = ['timetree-exporter', '-u', email, '-p', password]
-          if cal_code:
-            base += ['-c', cal_code]
-          tried = try_run(base + ['-o', str(out)]) or tried
-
-          # Try module CLI
-          if not tried:
-            base = ['python', '-m', 'timetree_exporter', '-u', email, '-p', password]
-            if cal_code:
-              base += ['-c', cal_code]
-            tried = try_run(base + ['-o', str(out)]) or tried
-
-          # Try Python API (best-effort/guess)
-          if not tried:
-            try:
-              import timetree_exporter
-              if hasattr(timetree_exporter, 'export'):
-                timetree_exporter.export(email=email, password=password, calendar_code=cal_code, output=str(out))
-                tried = True
-              else:
-                raise RuntimeError('export() not found in timetree_exporter')
-            except Exception as e:
-              print('Python API export failed:', e, file=sys.stderr)
-
-          if not out.exists():
-            print('ICS export failed.', file=sys.stderr)
-            sys.exit(1)
-          print('Exported:', out)
-          PY
-
-      - name: Notify today to LINE
+      - name: Send LINE message
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_TO: ${{ secrets.LINE_TO }}
-        run: |
-          python scripts/notify_today.py
-
+        run: python scripts/notify_today.py
