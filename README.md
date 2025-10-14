@@ -41,6 +41,45 @@
 2. `timetree-exporter` を用いて `data/timetree.ics` を生成
 3. `scripts/notify_today.py` を実行し LINE に通知
 
+## GitHub 自動化（gh使用）
+
+ローカルに GitHub CLI（gh）をインストールし、以下のスクリプトでリポ作成→プッシュ→Secrets登録→ワークフロー実行まで対話で自動化できます。
+
+1) gh の用意とログイン（認証はブラウザ承認）
+
+- gh インストール: https://github.com/cli/cli#installation
+- ログイン: `gh auth login --web --hostname github.com`
+
+2) ブートストラップスクリプトの実行
+
+```bash
+./scripts/gh_bootstrap.sh
+```
+
+スクリプトが行うこと:
+- CWD と必要ファイルの確認
+- Git 初期化/ブランチ統一/初回コミット
+- リポ作成/remote設定/プッシュ（`Kisuke0810/morning-timetree0810`）
+- Secrets 登録（対話・値は表示しません）
+  - `TIMETREE_EMAIL` / `TIMETREE_PASSWORD` / `TIMETREE_CAL_CODE(任意)`
+  - `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO`
+- ワークフローを手動トリガーし、実行ログを追跡
+
+3) 初回実行の確認
+
+- ターミナルに表示される Run のURLを確認し、結果をチェックします。
+
+## トラブルシューティング
+
+- TimeTreeのICS生成に失敗する:
+  - `TIMETREE_EMAIL` / `TIMETREE_PASSWORD` が正しいか
+  - 必要なら `TIMETREE_CAL_CODE` を設定
+- LINE送信で 401/403:
+  - `LINE_CHANNEL_ACCESS_TOKEN` が正しく有効か
+  - 送信先（`LINE_TO`）が Bot と友だち or グループ参加済みか
+- 実行時刻の変更:
+  - `.github/workflows/morning.yml` の `cron` はUTC。JSTとの差は+9時間
+
 ## ローカルでのテスト方法
 
 1. 依存インストール
@@ -82,4 +121,3 @@
 - 全日イベント（終日）は「終日 タイトル」として表示します。
 - 時刻付きイベントは当日範囲に重なる部分のみを `HH:MM-HH:MM` で表示します。
 - ICS が存在しない場合、エラーで終了します（Actions では先に生成されます）。
-
