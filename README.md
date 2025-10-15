@@ -17,6 +17,7 @@
 - `TIMETREE_CAL_CODE`: （任意）対象カレンダーのコード。複数カレンダーがある場合などに指定
 - `LINE_CHANNEL_ACCESS_TOKEN`: LINE Messaging API のチャネルアクセストークン（ロングリブ）
 - `LINE_TO`: 送信先の User ID / Group ID など（Bot と友だち／グループ参加済みであること）
+- `USE_BROADCAST`: （任意）`true/1/on/yes` のいずれかで Broadcast 送信に切替（`LINE_TO` は不要）
 
 > メモ: `TIMETREE_CAL_CODE` は未設定でも動作を試みます。必要に応じて TimeTree 側の共有設定や URL に含まれるコードを利用してください。
 
@@ -40,6 +41,14 @@
 1. 依存パッケージのインストール
 2. `timetree-exporter` を用いて `data/timetree.ics` を生成
 3. `scripts/notify_today.py` を実行し LINE に通知
+
+### 手動テスト（test_message 入力）
+
+Actions の手動実行時に `test_message` を入力すると、TimeTree の取得を行わず、その文言をそのまま送信します。
+
+- 使い方: Actions → Morning TimeTree → LINE → Run workflow → `test_message` に任意のテキストを入力
+- 送信経路: `USE_BROADCAST` が真なら Broadcast、未設定/偽なら Push（`LINE_TO` 必須）
+- スクリプトは送信の HTTP ステータスと短い要約を表示します
 
 ## GitHub 自動化（gh使用）
 
@@ -109,6 +118,16 @@
    ```
 
    環境変数を設定しないで実行すると、DRY RUN として整形結果を標準出力に表示します（送信は行いません）。
+
+4. テスト送信（--test）
+
+   TimeTree を読まずに任意メッセージを送るテスト:
+
+   ```bash
+   export LINE_CHANNEL_ACCESS_TOKEN=xxxxxxxx
+   export LINE_TO=yyyyyyyyyyyy   # または USE_BROADCAST=true
+   python scripts/notify_today.py --test "通知テストです"
+   ```
 
 ## 時間（実行時刻）の変更方法
 

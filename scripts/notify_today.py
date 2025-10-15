@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import argparse
 from datetime import datetime, date, time, timedelta
 from pathlib import Path
 
@@ -111,43 +112,60 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
     return f"{header}\n{body}"
 
 
-def push_line(message: str) -> None:
+def send_push(message: str):
     access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
     to = os.getenv("LINE_TO")
-
     if not access_token or not to:
-        # ローカルテスト用: 環境変数が無ければ標準出力に表示
-        print("[DRY RUN] 環境変数が未設定のため、LINE送信はスキップします。\n---\n" + message)
-        return
-
+        print("[DRY RUN] PUSH: 必要な環境変数が未設定のため送信スキップ\n---\n" + message)
+        return 0, True, "dry-run"
     url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "to": to,
-        "messages": [
-            {
-                "type": "text",
-                "text": message,
-            }
-        ],
-    }
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {"to": to, "messages": [{"type": "text", "text": message}]}
     resp = requests.post(url, headers=headers, json=payload, timeout=15)
-    try:
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"LINE送信に失敗しました: {e}\nstatus={resp.status_code}, body={resp.text}", file=sys.stderr)
-        sys.exit(1)
+    ok = 200 <= resp.status_code < 300
+    return resp.status_code, ok, (resp.text[:200] if resp.text else "")
+
+
+def send_broadcast(message: str):
+    access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+    if not access_token:
+        print("[DRY RUN] BROADCAST: 環境変数が未設定のため送信スキップ\n---\n" + message)
+        return 0, True, "dry-run"
+    url = "https://api.line.me/v2/bot/message/broadcast"
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {"messages": [{"type": "text", "text": message}]}
+    resp = requests.post(url, headers=headers, json=payload, timeout=15)
+    ok = 200 <= resp.status_code < 300
+    return resp.status_code, ok, (resp.text[:200] if resp.text else "")
+
+
+def send_line(message: str):
+    use_broadcast = os.getenv("USE_BROADCAST", "").strip().lower() in {"1", "true", "yes", "on"}
+    if use_broadcast:
+        status, ok, summary = send_broadcast(message)
+        route = "broadcast"
+    else:
+        status, ok, summary = send_push(message)
+        route = "push"
+    print(f"LINE送信 route={route} status={status} summary={summary}")
+    return ok
 
 
 def main():
-    ics_path = Path("data/timetree.ics")
-    cal = load_calendar(ics_path)
-    today = datetime.now(JST).date()
-    message = format_events_for_today(cal, today)
-    push_line(message)
+    parser = argparse.ArgumentParser(description="Send today's TimeTree events to LINE, or send test message.")
+    parser.add_argument("--test", dest="test_message", help="テスト送信用の文言（指定時はICSを読まずに送信）")
+    args = parser.parse_args()
+
+    if args.test_message:
+        message = args.test_message
+    else:
+        ics_path = Path("data/timetree.ics")
+        cal = load_calendar(ics_path)
+        today = datetime.now(JST).date()
+        message = format_events_for_today(cal, today)
+
+    ok = send_line(message)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
