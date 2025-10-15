@@ -60,7 +60,7 @@ set_secret() {
   local optional="${1:-}" # optional if 'optional'
   local val=""
   if [ "$optional" = "optional" ]; then
-    read -r -p "$prompt (空ならスキップ): " val || true
+    read -r -s -p "$prompt (空ならスキップ): " val || true; echo
     if [ -z "$val" ]; then
       echo "skip $key"
       return 0
@@ -76,7 +76,7 @@ set_secret() {
   echo "set $key"
 }
 
-set_secret TIMETREE_EMAIL "TIMETREE_EMAIL (TimeTree ログインメール)" # emailは平文入力
+set_secret TIMETREE_EMAIL "TIMETREE_EMAIL (TimeTree ログインメール)"
 set_secret TIMETREE_PASSWORD "TIMETREE_PASSWORD (TimeTree パスワード)"
 set_secret TIMETREE_CAL_CODE "TIMETREE_CAL_CODE (任意)" optional
 set_secret LINE_CHANNEL_ACCESS_TOKEN "LINE_CHANNEL_ACCESS_TOKEN"
@@ -92,9 +92,22 @@ sleep 3
 run_url=$(gh run list --workflow "$WORKFLOW_NAME" --limit 1 --json url -q '.[0].url' || true)
 echo "Triggered: ${run_url:-<url not detected>}"
 echo "ログを追跡します（Ctrl+Cで中断可）"
-gh run watch || true
+if gh run watch; then
+  status_summary="success"
+else
+  status_summary="completed (check details)"
+fi
+
+# 直近の実行の結果を取得
+conclusion=$(gh run list --workflow "$WORKFLOW_NAME" --limit 1 --json conclusion -q '.[0].conclusion' 2>/dev/null || true)
+html_url=$(gh run list --workflow "$WORKFLOW_NAME" --limit 1 --json url -q '.[0].url' 2>/dev/null || true)
 
 echo "[7/7] 完了"
 echo "リポURL: https://github.com/${REPO_FULL}"
-echo "ワークフロー: $WORKFLOW_NAME (cron: 0 0 * * * = JST 9:00)"
-
+echo "毎朝の送信時刻: JST 9:00（cron: 0 0 * * *）"
+echo "直近の実行: ${html_url:-<unknown>}"
+echo "結論: ${conclusion:-<unknown>}"
+echo "失敗時のチェックリスト:"
+echo "- TimeTree 連携: TIMETREE_EMAIL/PASSWORD/CAL_CODE（必要なら）"
+echo "- LINE: LINE_CHANNEL_ACCESS_TOKEN/LINE_TO（友だち・参加済みか）"
+echo "- 実行ログ: Export/Send 各ステップのエラー詳細"
