@@ -123,6 +123,10 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
 
     # 開始時刻でソート
     items.sort(key=lambda x: x[0])
+    # プレビュー（先頭3件）
+    preview = " / ".join(line for _, line in items[:3])
+    if preview:
+        print(f"抽出プレビュー: {preview}")
     body = "\n".join(line for _, line in items)
     return f"{header}\n{body}"
 
@@ -169,12 +173,35 @@ def send_line(message: str):
 def main():
     parser = argparse.ArgumentParser(description="Send today's TimeTree events to LINE, or send test message.")
     parser.add_argument("--test", dest="test_message", help="テスト送信用の文言（指定時はICSを読まずに送信）")
+    parser.add_argument("--dump", action="store_true", help="全イベントのJST換算をCSVで表示（送信しない）")
     args = parser.parse_args()
+
+    ics_path = Path("data/timetree.ics")
+    if args.dump:
+        cal = load_calendar(ics_path)
+        today = datetime.now(JST).date()
+        # Dump all events (max 200)
+        total = 0
+        matched = 0
+        day_start = JST.localize(datetime.combine(today, time(0, 0, 0)))
+        day_end = day_start + timedelta(days=1)
+        for i, vevent in enumerate(cal.walk("vevent")):
+            total += 1
+            times = event_time_range_jst(vevent)
+            if not times:
+                continue
+            s, e, is_all_day = times
+            if not (e <= day_start or s >= day_end):
+                matched += 1
+            summary = str(vevent.get("summary") or "(無題)").replace("\n", " ")
+            if i < 200:
+                print(f"{s.isoformat()}, {e.isoformat()}, {bool(is_all_day)}, {summary}")
+        print(f"totals: all={total}, matched={matched}")
+        sys.exit(0)
 
     if args.test_message:
         message = args.test_message
     else:
-        ics_path = Path("data/timetree.ics")
         cal = load_calendar(ics_path)
         today = datetime.now(JST).date()
         message = format_events_for_today(cal, today)

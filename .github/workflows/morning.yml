@@ -9,6 +9,10 @@ on:
         description: "任意のテスト文言（指定時はICSを無視して送信）"
         required: false
         type: string
+      dump:
+        description: "ダンプ（全イベントCSVを出力）を有効化"
+        required: false
+        type: boolean
 
 jobs:
   notify:
@@ -48,8 +52,21 @@ jobs:
           LINE_TO: ${{ secrets.LINE_TO }}
           USE_BROADCAST: ${{ secrets.USE_BROADCAST }}
           TEST_MESSAGE: ${{ github.event.inputs.test_message }}
+          DUMP: ${{ github.event.inputs.dump }}
         run: |
-          if [ -n "${TEST_MESSAGE}" ]; then
+          if [ "${DUMP}" = "true" ]; then
+            python scripts/notify_today.py --dump | tee dump.out
+            echo "### TimeTree Dump (first 200 lines)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "| start_jst | end_jst | allday | summary |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+            grep -v '^totals:' dump.out | head -n 200 | while IFS=, read -r c1 c2 c3 c4; do 
+              c1="${c1//|/ }"; c2="${c2//|/ }"; c3="${c3//|/ }"; c4="${c4//|/ }";
+              echo "| ${c1} | ${c2} | ${c3} | ${c4} |" >> "$GITHUB_STEP_SUMMARY"; 
+            done
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            grep '^totals:' dump.out | sed 's/^/`/; s/$/`/' >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "${TEST_MESSAGE}" ]; then
             python scripts/notify_today.py --test "${TEST_MESSAGE}"
           else
             python scripts/notify_today.py
