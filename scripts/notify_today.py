@@ -9,6 +9,7 @@ import re
 import pytz
 import requests
 from icalendar import Calendar
+import time as pytime
 
 
 JST = pytz.timezone("Asia/Tokyo")
@@ -139,9 +140,9 @@ def clipped_range_for_today(start_jst: datetime, end_jst: datetime, today_jst: d
     return s, e
 
 
-def format_events_for_today(cal: Calendar, today_jst: date) -> str:
+def format_events_for_today(cal: Calendar, today_jst: date):
     weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
-    header = f"本日の予定 {today_jst.strftime('%Y-%m-%d')}（{weekdays_jp[today_jst.weekday()]}）"
+    header_plain = f"本日の予定 {today_jst.strftime('%Y-%m-%d')}（{weekdays_jp[today_jst.weekday()]}）"
 
     items = []
     previews = []
@@ -181,18 +182,19 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
         memo = clean_description(desc_raw, memo_max) if show_memo else ""
         link = extract_meeting_link("\n".join([desc_raw, loc]), url_prop) if show_links else ""
 
-        if allday_like:
-            when = "終日"
-        else:
-            when = f"{disp_start.strftime('%H:%M')}"
+        when = "終日" if allday_like else f"{disp_start.strftime('%H:%M')}"
 
-        lines = []
-        head = f"・{when} {title}"
-        lines.append(head)
-        if memo:
-            lines.append(f"  メモ：{memo}")
-        if link:
-            lines.append(f"  リンク：{link}")
+        # New format: bullet, title, then memo block
+        lines = [f"・{when}", f"{title}"]
+        if get_env_bool("SHOW_MEMO", True):
+            lines.append("メモ：")
+            lines.append("【開催時刻】")
+            time_value = "終日" if allday_like else f"{disp_start.strftime('%H:%M')}〜"
+            lines.append(time_value)
+            if get_env_bool("SHOW_LINKS", True) and link:
+                lines.append(f"リンク：{link}")
+            if memo:
+                lines.append(memo)
         line_joined = "\n".join(lines)
 
         items.append((disp_start, line_joined))
@@ -204,7 +206,8 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
     print(f"デバッグ: today={today_jst.strftime('%Y-%m-%d')}, events_total={total}, normalized={normalized_count}, matched={matched}")
 
     if not items:
-        return f"{header}\n本日の予定はありません。"
+        header_msg = f"【{header_plain} 全0件】"
+        return header_msg, []
 
     # 開始時刻でソート
     items.sort(key=lambda x: x[0])
@@ -213,7 +216,9 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
     if preview:
         print(f"抽出プレビュー: {preview}")
     body = "\n".join(line for _, line in items)
-    return f"【{header}全{matched}件】\n{body}"
+    header_msg = f"【{header_plain} 全{matched}件】"
+    event_msgs = [line for _, line in items]
+    return header_msg, event_msgs
 
 
 def send_push(message: str):
@@ -243,7 +248,15 @@ def send_broadcast(message: str):
     return resp.status_code, ok, (resp.text[:200] if resp.text else "")
 
 
-def send_line(message: str):
+def clip_message(message: str) -> str:
+    if len(message) <= 5000:
+        return message
+    suffix = "…（長文省略）"
+    limit = max(0, 4800 - len(suffix))
+    return message[:limit] + suffix
+
+
+def send_one(message: str):
     use_broadcast = os.getenv("USE_BROADCAST", "").strip().lower() in {"1", "true", "yes", "on"}
     if use_broadcast:
         status, ok, summary = send_broadcast(message)
@@ -252,7 +265,47 @@ def send_line(message: str):
         status, ok, summary = send_push(message)
         route = "push"
     print(f"LINE送信 route={route} status={status} summary={summary}")
-    return ok
+    return status, ok, summary
+
+
+def send_messages(header: str, messages: list, titles: list = None):
+    # Preview
+    print("送信前プレビュー: ヘッダー")
+    print(header)
+    for i, msg in enumerate(messages[:3]):
+        parts = msg.splitlines()
+        p1 = parts[0] if parts else ""
+        p2 = parts[1] if len(parts) > 1 else ""
+        print(f"送信前プレビュー[{i}]: {p1} | {p2}")
+
+    try:
+        sleep_ms = int(os.getenv("SLEEP_MS", "250") or 250)
+    except Exception:
+        sleep_ms = 250
+
+    sent = 0
+    errors = 0
+
+    # Header first
+    status, ok, _ = send_one(clip_message(header))
+    sent += 1
+    if not ok:
+        errors += 1
+
+    pytime.sleep(sleep_ms / 1000.0)
+
+    # Each event as one message
+    for idx, msg in enumerate(messages):
+        status, ok, summary = send_one(clip_message(msg))
+        sent += 1
+        if not ok:
+            errors += 1
+            title_hint = titles[idx] if titles and idx < len(titles) else "(no-title)"
+            print(f"送信失敗: title={title_hint} status={status} summary={summary}")
+        pytime.sleep(sleep_ms / 1000.0)
+
+    print(f"送信完了: sent={sent}, errors={errors}")
+    return errors == 0
 
 
 def main():
@@ -290,19 +343,23 @@ def main():
         sys.exit(0)
 
     if args.test_message:
-        # テストでも整形を使い、1件のダミーイベントとして出力
+        # テストでも整形を使い、1件のダミーイベントとして送信
         today = datetime.now(JST).date()
         weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
-        header = f"【本日の予定 {today.strftime('%Y-%m-%d')}（{weekdays_jp[today.weekday()]}）全1件】"
+        header = f"【本日の予定 {today.strftime('%Y-%m-%d')}（{weekdays_jp[today.weekday()]}） 全1件】"
         when = datetime.now(JST).strftime('%H:%M')
-        lines = [f"・{when} {args.test_message}"]
-        message = header + "\n" + "\n".join(lines)
+        lines = [f"・{when}", f"{args.test_message}"]
+        if get_env_bool("SHOW_MEMO", True):
+            lines.append("メモ：")
+            lines.append("【開催時刻】")
+            lines.append(f"{when}〜")
+        event_msgs = ["\n".join(lines)]
+        ok = send_messages(header, event_msgs, [args.test_message])
     else:
         cal = load_calendar(ics_path)
         today = datetime.now(JST).date()
-        message = format_events_for_today(cal, today)
-
-    ok = send_line(message)
+        header, event_msgs = format_events_for_today(cal, today)
+        ok = send_messages(header, event_msgs)
     sys.exit(0 if ok else 1)
 
 

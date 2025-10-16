@@ -53,6 +53,7 @@ jobs:
           SHOW_MEMO: ${{ secrets.SHOW_MEMO }}
           SHOW_LINKS: ${{ secrets.SHOW_LINKS }}
           MEMO_MAX: ${{ secrets.MEMO_MAX }}
+          SLEEP_MS: ${{ secrets.SLEEP_MS }}
           TEST_MESSAGE: ${{ github.event.inputs.test_message }}
           DUMP: ${{ github.event.inputs.dump }}
         run: |
