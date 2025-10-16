@@ -5,6 +5,7 @@ import argparse
 from datetime import datetime, date, time, timedelta
 from pathlib import Path
 
+import re
 import pytz
 import requests
 from icalendar import Calendar
@@ -89,6 +90,40 @@ def normalize_event(start_jst: datetime, end_jst, allday_like: bool):
     return s, e, normalized
 
 
+def get_env_bool(name: str, default: bool) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def extract_meeting_link(text: str, url_prop: str = "") -> str:
+    patterns = [
+        r"https?://[\w.-]*zoom\.us/\S+",
+        r"https?://meet\.google\.com/\S+",
+        r"https?://teams\.microsoft\.com/\S+",
+        r"https?://\w+\.webex\.com/\S+",
+        r"https?://webex\.com/\S+",
+    ]
+    corpus = "\n".join(filter(None, [url_prop or "", text or ""]))
+    for pat in patterns:
+        m = re.search(pat, corpus)
+        if m:
+            return m.group(0)
+    m = re.search(r"https?://[^\s)]+", corpus)
+    return m.group(0) if m else ""
+
+
+def clean_description(desc: str, max_len: int) -> str:
+    if not desc:
+        return ""
+    lines = [re.sub(r"\s{2,}", " ", ln.strip()) for ln in desc.splitlines()]
+    s = "\n".join(lines).strip()
+    if max_len > 0 and len(s) > max_len:
+        return s[:max_len] + "…（続きあり）"
+    return s
+
+
 def overlaps_today(start_jst: datetime, end_jst: datetime, today_jst: date) -> bool:
     # 今日 00:00 ～ 明日 00:00 の半開区間と少しでも重なるか
     day_start = JST.localize(datetime.combine(today_jst, time(0, 0, 0)))
@@ -133,17 +168,34 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
         location = vevent.get("location")
         loc = str(location).strip() if location else ""
 
+        url_prop = str(vevent.get("url") or "").strip()
+        desc_raw = str(vevent.get("description") or "")
+
+        show_memo = get_env_bool("SHOW_MEMO", True)
+        show_links = get_env_bool("SHOW_LINKS", True)
+        try:
+            memo_max = int(os.getenv("MEMO_MAX", "180") or 180)
+        except Exception:
+            memo_max = 180
+
+        memo = clean_description(desc_raw, memo_max) if show_memo else ""
+        link = extract_meeting_link("\n".join([desc_raw, loc]), url_prop) if show_links else ""
+
         if allday_like:
             when = "終日"
         else:
-            when = f"{disp_start.strftime('%H:%M')}-{disp_end.strftime('%H:%M')}"
+            when = f"{disp_start.strftime('%H:%M')}"
 
-        line = f"{when}  {title}"
-        if loc:
-            line += f"（{loc}）"
+        lines = []
+        head = f"・{when} {title}"
+        lines.append(head)
+        if memo:
+            lines.append(f"  メモ：{memo}")
+        if link:
+            lines.append(f"  リンク：{link}")
+        line_joined = "\n".join(lines)
 
-        items.append((disp_start, line))
-        # preview token
+        items.append((disp_start, line_joined))
         token = "終日" if allday_like else disp_start.strftime('%H:%M')
         previews.append(f"{token}:{title}")
 
@@ -161,7 +213,7 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
     if preview:
         print(f"抽出プレビュー: {preview}")
     body = "\n".join(line for _, line in items)
-    return f"{header}\n{body}"
+    return f"【{header}全{matched}件】\n{body}"
 
 
 def send_push(message: str):
@@ -238,7 +290,13 @@ def main():
         sys.exit(0)
 
     if args.test_message:
-        message = args.test_message
+        # テストでも整形を使い、1件のダミーイベントとして出力
+        today = datetime.now(JST).date()
+        weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
+        header = f"【本日の予定 {today.strftime('%Y-%m-%d')}（{weekdays_jp[today.weekday()]}）全1件】"
+        when = datetime.now(JST).strftime('%H:%M')
+        lines = [f"・{when} {args.test_message}"]
+        message = header + "\n" + "\n".join(lines)
     else:
         cal = load_calendar(ics_path)
         today = datetime.now(JST).date()

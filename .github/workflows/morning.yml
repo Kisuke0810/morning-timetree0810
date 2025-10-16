@@ -1,8 +1,8 @@
 name: Morning TimeTree → LINE
 on:
   schedule:
-    # 毎朝 9:00 JST（= 0:00 UTC）
-    - cron: "0 0 * * *"
+    # 毎朝 10:00 JST（= 1:00 UTC）
+    - cron: "0 1 * * *"
   workflow_dispatch:
     inputs:
       test_message:
@@ -50,6 +50,9 @@ jobs:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_TO: ${{ secrets.LINE_TO }}
           USE_BROADCAST: ${{ secrets.USE_BROADCAST }}
+          SHOW_MEMO: ${{ secrets.SHOW_MEMO }}
+          SHOW_LINKS: ${{ secrets.SHOW_LINKS }}
+          MEMO_MAX: ${{ secrets.MEMO_MAX }}
           TEST_MESSAGE: ${{ github.event.inputs.test_message }}
           DUMP: ${{ github.event.inputs.dump }}
         run: |

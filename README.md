@@ -1,6 +1,6 @@
 # Morning TimeTree → LINE Notifier
 
-毎朝 9:00（JST）に TimeTree の予定（ICS）を読み取り、LINE にプッシュ通知する最小構成です。GitHub Actions のスケジュールで自動実行されます。
+毎朝 10:00（JST）に TimeTree の予定（ICS）を読み取り、LINE にプッシュ通知する最小構成です。GitHub Actions のスケジュールで自動実行されます。
 
 ## 仕組み概要
 
@@ -18,6 +18,12 @@
 - `LINE_CHANNEL_ACCESS_TOKEN`: LINE Messaging API のチャネルアクセストークン（ロングリブ）
 - `LINE_TO`: 送信先の User ID / Group ID など（Bot と友だち／グループ参加済みであること）
 - `USE_BROADCAST`: （任意）`true/1/on/yes` のいずれかで Broadcast 送信に切替（`LINE_TO` は不要）
+  
+オプション（表示トグル）:
+
+- `SHOW_MEMO`: （任意, 既定 true）false でメモを非表示
+- `SHOW_LINKS`: （任意, 既定 true）false で「リンク：」行を非表示
+- `MEMO_MAX`: （任意, 既定 180）メモの最大文字数
 
 > メモ: `TIMETREE_CAL_CODE` は未設定でも動作を試みます。必要に応じて TimeTree 側の共有設定や URL に含まれるコードを利用してください。
 
@@ -25,7 +31,7 @@
 
 - `requirements.txt`: 使用パッケージ（timetree-exporter / icalendar / requests / pytz）
 - `scripts/notify_today.py`: 本日の予定を整形し LINE に Push
-- `.github/workflows/morning.yml`: 毎日 9:00 JST 実行（UTC 0:00）。まず ICS 生成 → 次に通知
+- `.github/workflows/morning.yml`: 毎日 10:00 JST 実行（UTC 1:00）。まず ICS 生成 → 次に通知
 - `data/timetree.ics`: 生成される ICS ファイル（GitHub Actions で生成）
 - `data/.keep`: 空ファイル（ディレクトリ確保用）
 
@@ -33,7 +39,7 @@
 
 ワークフローは以下のトリガーで実行されます。
 
-- スケジュール: `0 0 * * *`（UTC）= 毎日 9:00（JST）
+- スケジュール: `0 1 * * *`（UTC）= 毎日 10:00（JST）
 - 手動実行: Actions タブから `Run workflow`
 
 処理手順（ワークフロー内）
@@ -41,6 +47,17 @@
 1. 依存パッケージのインストール
 2. `timetree-exporter` を用いて `data/timetree.ics` を生成
 3. `scripts/notify_today.py` を実行し LINE に通知
+
+メッセージの例（メモ/リンク付き）:
+
+```
+【本日の予定 2025-10-17（金）全2件】
+・終日 サブスク登録&利用方法サポート
+  メモ：◯◯◯…（続きあり）
+  リンク：https://zoom.us/j/xxxx
+・20:00 AUBE講座
+  メモ：◯◯◯
+```
 
 ### 手動テスト（test_message 入力）
 
@@ -72,6 +89,7 @@ Actions の手動実行時に `test_message` を入力すると、TimeTree の�
 - Secrets 登録（対話・値は表示しません）
   - `TIMETREE_EMAIL` / `TIMETREE_PASSWORD` / `TIMETREE_CAL_CODE(任意)`
   - `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO`
+  - 表示トグル（任意）: `SHOW_MEMO` / `SHOW_LINKS` / `MEMO_MAX`
 - ワークフローを手動トリガーし、実行ログを追跡
 
 3) 初回実行の確認
@@ -88,6 +106,7 @@ Actions の手動実行時に `test_message` を入力すると、TimeTree の�
   - 送信先（`LINE_TO`）が Bot と友だち or グループ参加済みか
 - 実行時刻の変更:
   - `.github/workflows/morning.yml` の `cron` はUTC。JSTとの差は+9時間
+  - 既定は JST 10:00 → UTC 1:00（cron: `0 1 * * *`）
 
 ## ローカルでのテスト方法
 
@@ -138,5 +157,5 @@ Actions の手動実行時に `test_message` を入力すると、TimeTree の�
 
 - タイムゾーンは JST 固定で処理しています。
 - 全日イベント（終日）は「終日 タイトル」として表示します。
-- 時刻付きイベントは当日範囲に重なる部分のみを `HH:MM-HH:MM` で表示します。
+- 時刻付きイベントは開始時刻のみ `HH:MM` を表示します。
 - ICS が存在しない場合、エラーで終了します（Actions では先に生成されます）。
