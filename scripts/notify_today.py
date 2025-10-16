@@ -48,20 +48,45 @@ def event_time_range_jst(vevent):
     dtend_prop = vevent.get("dtend")
     dtend = dtend_prop.dt if dtend_prop is not None else None
 
+    # JSTへ変換（ここでは終了未指定時の補完は行わない）
     start_jst = to_tz(dtstart, JST)
+    end_jst = to_tz(dtend, JST) if dtend is not None else None
 
-    # all-day判定
-    is_all_day = isinstance(dtstart, date) and not isinstance(dtstart, datetime)
+    # allday_like: DTSTART/DTEND のいずれかが日付のみの場合
+    is_date_start = isinstance(dtstart, date) and not isinstance(dtstart, datetime)
+    is_date_end = isinstance(dtend, date) and not isinstance(dtend, datetime) if dtend is not None else False
+    allday_like = is_date_start or is_date_end
 
-    if dtend is None:
-        # 終了が無い場合は終日なら+1日、時刻ありなら+1時間を仮置き
-        end_jst = start_jst + (timedelta(days=1) if is_all_day else timedelta(hours=1))
+    return start_jst, end_jst, allday_like
+
+
+def normalize_event(start_jst: datetime, end_jst, allday_like: bool):
+    """Ensure non-zero duration and tz-aware JST datetimes.
+
+    - allday_like True (VALUE=DATEを含む) → end<=start or None は +1日
+    - それ以外（時刻あり） → end<=start or None は +1時間
+    Returns (start, end, normalized_flag)
+    """
+    # ensure tz
+    def ensure_jst(dt):
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return JST.localize(dt)
+        return dt.astimezone(JST)
+
+    s = ensure_jst(start_jst)
+    e = ensure_jst(end_jst)
+    normalized = False
+    if allday_like:
+        if e is None or e <= s:
+            e = s + timedelta(days=1)
+            normalized = True
     else:
-        end_jst = to_tz(dtend, JST)
-        # 仕様上、全日イベントの DTEND が日付の場合は排他的（翌日00:00）で妥当。
-        # 上の to_tz(date) は その日 00:00 を返すため、[start, end) の判定で整合。
-
-    return start_jst, end_jst, is_all_day
+        if e is None or e <= s:
+            e = s + timedelta(hours=1)
+            normalized = True
+    return s, e, normalized
 
 
 def overlaps_today(start_jst: datetime, end_jst: datetime, today_jst: date) -> bool:
@@ -84,13 +109,18 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
     header = f"本日の予定 {today_jst.strftime('%Y-%m-%d')}（{weekdays_jp[today_jst.weekday()]}）"
 
     items = []
+    previews = []
     total = 0
+    normalized_count = 0
     for vevent in cal.walk("vevent"):
         total += 1
         times = event_time_range_jst(vevent)
         if times is None:
             continue
-        start_jst, end_jst, is_all_day = times
+        start_jst, end_jst, allday_like = times
+        start_jst, end_jst, did_norm = normalize_event(start_jst, end_jst, allday_like)
+        if did_norm:
+            normalized_count += 1
         if not overlaps_today(start_jst, end_jst, today_jst):
             continue
 
@@ -103,7 +133,7 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
         location = vevent.get("location")
         loc = str(location).strip() if location else ""
 
-        if is_all_day:
+        if allday_like:
             when = "終日"
         else:
             when = f"{disp_start.strftime('%H:%M')}-{disp_end.strftime('%H:%M')}"
@@ -113,10 +143,13 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
             line += f"（{loc}）"
 
         items.append((disp_start, line))
+        # preview token
+        token = "終日" if allday_like else disp_start.strftime('%H:%M')
+        previews.append(f"{token}:{title}")
 
     matched = len(items)
     # デバッグ出力（必ず1行出す）
-    print(f"デバッグ: today={today_jst.strftime('%Y-%m-%d')}, events_total={total}, matched={matched}")
+    print(f"デバッグ: today={today_jst.strftime('%Y-%m-%d')}, events_total={total}, normalized={normalized_count}, matched={matched}")
 
     if not items:
         return f"{header}\n本日の予定はありません。"
@@ -124,7 +157,7 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
     # 開始時刻でソート
     items.sort(key=lambda x: x[0])
     # プレビュー（先頭3件）
-    preview = " / ".join(line for _, line in items[:3])
+    preview = " / ".join(previews[:3])
     if preview:
         print(f"抽出プレビュー: {preview}")
     body = "\n".join(line for _, line in items)
@@ -183,6 +216,7 @@ def main():
         # Dump all events (max 200)
         total = 0
         matched = 0
+        normalized_count = 0
         day_start = JST.localize(datetime.combine(today, time(0, 0, 0)))
         day_end = day_start + timedelta(days=1)
         for i, vevent in enumerate(cal.walk("vevent")):
@@ -190,12 +224,16 @@ def main():
             times = event_time_range_jst(vevent)
             if not times:
                 continue
-            s, e, is_all_day = times
+            s, e, allday_like = times
+            s, e, did_norm = normalize_event(s, e, allday_like)
+            if did_norm:
+                normalized_count += 1
             if not (e <= day_start or s >= day_end):
                 matched += 1
             summary = str(vevent.get("summary") or "(無題)").replace("\n", " ")
             if i < 200:
-                print(f"{s.isoformat()}, {e.isoformat()}, {bool(is_all_day)}, {summary}")
+                print(f"{s.isoformat()}, {e.isoformat()}, {bool(allday_like)}, {summary}")
+        print(f"ゼロ長さ補正した件数: {normalized_count}")
         print(f"totals: all={total}, matched={matched}")
         sys.exit(0)
 
