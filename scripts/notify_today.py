@@ -22,13 +22,19 @@ def load_calendar(ics_path: Path) -> Calendar:
 
 
 def to_tz(dt_obj, tz):
-    # icalendar の dt は date か datetime の場合がある
+    """Convert an ical dt object (date or datetime) to tz-aware datetime in tz.
+
+    - date: interpret as 00:00 in tz
+    - naive datetime: interpret as time already in tz (JST) and localize
+    - tz-aware datetime: convert to tz
+    """
     if isinstance(dt_obj, datetime):
         if dt_obj.tzinfo is None:
-            dt_obj = pytz.utc.localize(dt_obj)
+            # 依頼: naive は JST とみなす
+            return tz.localize(dt_obj)
         return dt_obj.astimezone(tz)
     elif isinstance(dt_obj, date):
-        # 終日扱い: その日の 00:00 として扱う
+        # 終日: その日の 00:00（inclusive）。
         return tz.localize(datetime(dt_obj.year, dt_obj.month, dt_obj.day))
     else:
         raise TypeError(f"Unsupported dt type: {type(dt_obj)}")
@@ -52,14 +58,17 @@ def event_time_range_jst(vevent):
         end_jst = start_jst + (timedelta(days=1) if is_all_day else timedelta(hours=1))
     else:
         end_jst = to_tz(dtend, JST)
+        # 仕様上、全日イベントの DTEND が日付の場合は排他的（翌日00:00）で妥当。
+        # 上の to_tz(date) は その日 00:00 を返すため、[start, end) の判定で整合。
 
     return start_jst, end_jst, is_all_day
 
 
 def overlaps_today(start_jst: datetime, end_jst: datetime, today_jst: date) -> bool:
+    # 今日 00:00 ～ 明日 00:00 の半開区間と少しでも重なるか
     day_start = JST.localize(datetime.combine(today_jst, time(0, 0, 0)))
     day_end = day_start + timedelta(days=1)
-    return start_jst < day_end and end_jst > day_start
+    return not (end_jst <= day_start or start_jst >= day_end)
 
 
 def clipped_range_for_today(start_jst: datetime, end_jst: datetime, today_jst: date):
@@ -75,7 +84,9 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
     header = f"本日の予定 {today_jst.strftime('%Y-%m-%d')}（{weekdays_jp[today_jst.weekday()]}）"
 
     items = []
+    total = 0
     for vevent in cal.walk("vevent"):
+        total += 1
         times = event_time_range_jst(vevent)
         if times is None:
             continue
@@ -102,6 +113,10 @@ def format_events_for_today(cal: Calendar, today_jst: date) -> str:
             line += f"（{loc}）"
 
         items.append((disp_start, line))
+
+    matched = len(items)
+    # デバッグ出力（必ず1行出す）
+    print(f"デバッグ: today={today_jst.strftime('%Y-%m-%d')}, events_total={total}, matched={matched}")
 
     if not items:
         return f"{header}\n本日の予定はありません。"
