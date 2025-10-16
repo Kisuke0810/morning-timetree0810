@@ -24,6 +24,8 @@
 - `SHOW_MEMO`: （任意, 既定 true）false でメモを非表示
 - `SHOW_LINKS`: （任意, 既定 true）false で「リンク：」行を非表示
 - `MEMO_MAX`: （任意, 既定 180）メモの最大文字数
+ - `SLEEP_MS`: （任意, 既定 250）メッセージ間のスリープ（ms）
+ - `FAIL_NOTIFY`: （任意）`true` で失敗時に1行アラート（Runリンク付き）をLINEへ送信
 
 > メモ: `TIMETREE_CAL_CODE` は未設定でも動作を試みます。必要に応じて TimeTree 側の共有設定や URL に含まれるコードを利用してください。
 

@@ -17,6 +17,8 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    env:
+      FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,10 +30,12 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Export TimeTree to ICS
+        id: export
         env:
           TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
           TIMETREE_PASSWORD: ${{ secrets.TIMETREE_PASSWORD }}
           TIMETREE_CAL_CODE: ${{ secrets.TIMETREE_CAL_CODE }} # 任意
+          FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
         run: |
           mkdir -p data
           if [ -n "${TIMETREE_CAL_CODE}" ]; then
@@ -46,6 +50,7 @@ jobs:
           head -n 40 data/timetree.ics || true
 
       - name: Send LINE message
+        id: send
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_TO: ${{ secrets.LINE_TO }}
@@ -56,6 +61,7 @@ jobs:
           SLEEP_MS: ${{ secrets.SLEEP_MS }}
           TEST_MESSAGE: ${{ github.event.inputs.test_message }}
           DUMP: ${{ github.event.inputs.dump }}
+          FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
         run: |
           if [ "${DUMP}" = "true" ]; then
             echo "### TimeTree dump (先頭200行)" >> "$GITHUB_STEP_SUMMARY"
@@ -74,3 +80,22 @@ jobs:
           name: timetree-ics
           path: data/timetree.ics
           if-no-files-found: warn
+
+      - name: Failure alert (one-line)
+        if: ${{ failure() && env.FAIL_NOTIFY == 'true' }}
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_TO: ${{ secrets.LINE_TO }}
+          USE_BROADCAST: ${{ secrets.USE_BROADCAST }}
+          FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
+          STEP_EXPORT: ${{ steps.export.outcome }}
+          STEP_SEND: ${{ steps.send.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          step="unknown"
+          if [ "${STEP_EXPORT}" = "failure" ]; then step="export"; fi
+          if [ "${STEP_SEND}" = "failure" ]; then step="send"; fi
+          ALERT_MESSAGE="⚠️ Morning TimeTree 配信失敗（step=${step}）
+          ${RUN_URL}"
+          export ALERT_MESSAGE
+          python scripts/line_alert.py
