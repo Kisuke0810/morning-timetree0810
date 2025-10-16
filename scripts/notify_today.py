@@ -125,6 +125,39 @@ def clean_description(desc: str, max_len: int) -> str:
     return s
 
 
+def shape_memo(desc: str, max_len: int, allday_like: bool) -> str:
+    if not desc:
+        return ""
+    raw_lines = [re.sub(r"\s{2,}", " ", ln.strip()) for ln in desc.splitlines()]
+    shaped = []
+    prev_was_time_label = False
+    blank_count = 0
+    for idx, ln in enumerate(raw_lines):
+        # remove "【開催時刻】終日" near the beginning for all-day events
+        if allday_like and idx < 3 and re.match(r"^【開催時刻】\s*終日\s*$", ln):
+            continue
+        # collapse consecutive lines starting with 【開催時刻】
+        is_time_label = ln.startswith("【開催時刻】")
+        if is_time_label and prev_was_time_label:
+            continue
+        prev_was_time_label = is_time_label
+
+        # collapse multiple blank lines
+        if ln == "":
+            blank_count += 1
+            if blank_count > 1:
+                continue
+        else:
+            blank_count = 0
+
+        shaped.append(ln)
+
+    s = "\n".join(shaped).strip()
+    if max_len > 0 and len(s) > max_len:
+        s = s[:max_len] + "…（続きあり）"
+    return s
+
+
 def overlaps_today(start_jst: datetime, end_jst: datetime, today_jst: date) -> bool:
     # 今日 00:00 ～ 明日 00:00 の半開区間と少しでも重なるか
     day_start = JST.localize(datetime.combine(today_jst, time(0, 0, 0)))
@@ -179,22 +212,18 @@ def format_events_for_today(cal: Calendar, today_jst: date):
         except Exception:
             memo_max = 180
 
-        memo = clean_description(desc_raw, memo_max) if show_memo else ""
+        memo = shape_memo(desc_raw, memo_max, allday_like) if show_memo else ""
         link = extract_meeting_link("\n".join([desc_raw, loc]), url_prop) if show_links else ""
 
         when = "終日" if allday_like else f"{disp_start.strftime('%H:%M')}"
 
-        # New format: bullet, title, then memo block
+        # New format: bullet, title, optional link, memo only (no auto labels)
         lines = [f"・{when}", f"{title}"]
-        if get_env_bool("SHOW_MEMO", True):
+        if get_env_bool("SHOW_LINKS", True) and link:
+            lines.append(f"リンク：{link}")
+        if get_env_bool("SHOW_MEMO", True) and memo:
             lines.append("メモ：")
-            lines.append("【開催時刻】")
-            time_value = "終日" if allday_like else f"{disp_start.strftime('%H:%M')}〜"
-            lines.append(time_value)
-            if get_env_bool("SHOW_LINKS", True) and link:
-                lines.append(f"リンク：{link}")
-            if memo:
-                lines.append(memo)
+            lines.append(memo)
         line_joined = "\n".join(lines)
 
         items.append((disp_start, line_joined))
@@ -351,8 +380,7 @@ def main():
         lines = [f"・{when}", f"{args.test_message}"]
         if get_env_bool("SHOW_MEMO", True):
             lines.append("メモ：")
-            lines.append("【開催時刻】")
-            lines.append(f"{when}〜")
+            # no auto time/labels; only memo placeholder in test
         event_msgs = ["\n".join(lines)]
         ok = send_messages(header, event_msgs, [args.test_message])
     else:
