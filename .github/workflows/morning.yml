@@ -1,8 +1,10 @@
 name: Morning TimeTree → LINE
 on:
   schedule:
-    # 毎朝 10:00 JST（= 1:00 UTC）
+    # 毎朝 10:00 JST（= 1:00 UTC）本番
     - cron: "0 1 * * *"
+    # 毎朝 10:10 JST（= 1:10 UTC）予備
+    - cron: "10 1 * * *"
   workflow_dispatch:
     inputs:
       test_message:
@@ -28,6 +30,17 @@ jobs:
 
       - name: Install deps
         run: pip install -r requirements.txt
+
+      - name: Compute JST date
+        id: jst
+        run: echo "date=$(TZ=Asia/Tokyo date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore sent cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .sent-marker
+          key: sent-${{ steps.jst.outputs.date }}
 
       - name: Export TimeTree to ICS
         id: export
@@ -62,7 +75,18 @@ jobs:
           TEST_MESSAGE: ${{ github.event.inputs.test_message }}
           DUMP: ${{ github.event.inputs.dump }}
           FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
+          JST_DATE: ${{ steps.jst.outputs.date }}
+        if: ${{ steps.cache.outputs.cache-hit != 'true' || github.event.inputs.dump == 'true' || github.event.inputs.test_message != '' }}
         run: |
+          # If this is an actual scheduled send (not dump/test), wait until 10:00 JST if started early
+          if [ "${DUMP}" != "true" ] && [ -z "${TEST_MESSAGE}" ]; then
+            now_ts=$(date +%s)
+            target_ts=$(TZ=Asia/Tokyo date -d "$(TZ=Asia/Tokyo date +%Y-%m-%d) 10:00" +%s)
+            if [ "$now_ts" -lt "$target_ts" ]; then
+              echo "Waiting until 10:00 JST..."
+              sleep $(( target_ts - now_ts ))
+            fi
+          fi
           if [ "${DUMP}" = "true" ]; then
             echo "### TimeTree dump (先頭200行)" >> "$GITHUB_STEP_SUMMARY"
             python scripts/notify_today.py --dump | tee dump.csv
@@ -73,6 +97,10 @@ jobs:
             python scripts/notify_today.py
           fi
 
+      - name: Already sent today
+        if: ${{ steps.cache.outputs.cache-hit == 'true' && github.event_name == 'schedule' }}
+        run: echo "本日は既に送信済み（${{ steps.jst.outputs.date }}）。スキップします。"
+
       - name: Upload ICS artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -80,6 +108,19 @@ jobs:
           name: timetree-ics
           path: data/timetree.ics
           if-no-files-found: warn
+
+      - name: Write sent marker
+        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' && github.event.inputs.dump != 'true' && github.event.inputs.test_message == '' }}
+        env:
+          JST_DATE: ${{ steps.jst.outputs.date }}
+        run: echo "sent on ${JST_DATE}" > .sent-marker
+
+      - name: Save sent cache
+        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' && github.event.inputs.dump != 'true' && github.event.inputs.test_message == '' }}
+        uses: actions/cache@v4
+        with:
+          path: .sent-marker
+          key: sent-${{ steps.jst.outputs.date }}
 
       - name: Failure alert (one-line)
         if: ${{ failure() && env.FAIL_NOTIFY == 'true' }}
