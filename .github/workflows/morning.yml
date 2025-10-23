@@ -1,6 +1,9 @@
 name: Morning TimeTree → LINE
 on:
   schedule:
+    - cron: "55 0 * * *"   # JST 09:55
+    - cron: "57 0 * * *"   # JST 09:57
+    - cron: "59 0 * * *"   # JST 09:59
     # JST 10:00 本命（UTC基準）および 10:10〜10:50 保険
     - cron: "0 1 * * *"     # JST 10:00 本命
     - cron: "10 1 * * *"    # 10:10 保険
@@ -53,6 +56,7 @@ jobs:
 
       - name: Export TimeTree to ICS
         id: export
+        if: ${{ steps.cache.outputs.cache-hit != 'true' || github.event.inputs.dump == 'true' || github.event.inputs.test_message != '' }}
         env:
           TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
           TIMETREE_PASSWORD: ${{ secrets.TIMETREE_PASSWORD }}
@@ -67,6 +71,7 @@ jobs:
           fi
 
       - name: Debug ICS head
+        if: ${{ steps.cache.outputs.cache-hit != 'true' || github.event.inputs.dump == 'true' || github.event.inputs.test_message != '' }}
         run: |
           ls -l data || true
           head -n 40 data/timetree.ics || true
