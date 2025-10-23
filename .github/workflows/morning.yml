@@ -1,10 +1,13 @@
 name: Morning TimeTree → LINE
 on:
   schedule:
-    # 毎朝 10:00 JST（= 1:00 UTC）本番
-    - cron: "0 1 * * *"
-    # 毎朝 10:10 JST（= 1:10 UTC）予備
-    - cron: "10 1 * * *"
+    # JST 10:00 本命（UTC基準）および 10:10〜10:50 保険
+    - cron: "0 1 * * *"     # JST 10:00 本命
+    - cron: "10 1 * * *"    # 10:10 保険
+    - cron: "20 1 * * *"    # 10:20 保険
+    - cron: "30 1 * * *"    # 10:30 保険
+    - cron: "40 1 * * *"    # 10:40 保険
+    - cron: "50 1 * * *"    # 10:50 保険
   workflow_dispatch:
     inputs:
       test_message:
@@ -23,6 +26,12 @@ jobs:
       FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show clocks (UTC/JST)
+        id: clocks
+        run: |
+          echo "UTC : $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "JST : $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M:%S %Z')"
 
       - uses: actions/setup-python@v5
         with:
@@ -78,13 +87,12 @@ jobs:
           JST_DATE: ${{ steps.jst.outputs.date }}
         if: ${{ steps.cache.outputs.cache-hit != 'true' || github.event.inputs.dump == 'true' || github.event.inputs.test_message != '' }}
         run: |
-          # If this is an actual scheduled send (not dump/test), wait until 10:00 JST if started early
+          # If this is an actual scheduled send (not dump/test), wait until 10:00 JST strictly using JST epoch
           if [ "${DUMP}" != "true" ] && [ -z "${TEST_MESSAGE}" ]; then
-            now_ts=$(date +%s)
-            target_ts=$(TZ=Asia/Tokyo date -d "$(TZ=Asia/Tokyo date +%Y-%m-%d) 10:00" +%s)
-            if [ "$now_ts" -lt "$target_ts" ]; then
-              echo "Waiting until 10:00 JST..."
-              sleep $(( target_ts - now_ts ))
+            NOW_JST=$(TZ=Asia/Tokyo date +%s)
+            TARGET_JST=$(TZ=Asia/Tokyo date -d "$(TZ=Asia/Tokyo date +%Y-%m-%d) 10:00" +%s)
+            if [ "$NOW_JST" -lt "$TARGET_JST" ]; then
+              echo "Sleep until JST 10:00..."; sleep $(( TARGET_JST - NOW_JST ));
             fi
           fi
           if [ "${DUMP}" = "true" ]; then
@@ -121,6 +129,14 @@ jobs:
         with:
           path: .sent-marker
           key: sent-${{ steps.jst.outputs.date }}
+
+      - name: Cron audit (list all crons)
+        if: always()
+        run: |
+          echo "### Cron audit" >> "$GITHUB_STEP_SUMMARY"
+          python tools/list_crons.py | tee cron_audit.txt
+          echo >> "$GITHUB_STEP_SUMMARY"
+          cat cron_audit.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Failure alert (one-line)
         if: ${{ failure() && env.FAIL_NOTIFY == 'true' }}
