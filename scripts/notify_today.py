@@ -6,13 +6,18 @@ from datetime import datetime, date, time, timedelta
 from pathlib import Path
 
 import re
-import pytz
+from zoneinfo import ZoneInfo
 import requests
 from icalendar import Calendar
 import time as pytime
 
 
-JST = pytz.timezone("Asia/Tokyo")
+JST = ZoneInfo("Asia/Tokyo")
+
+
+def today_jst() -> date:
+    """JSTベースの「今日」の日付を返す"""
+    return datetime.now(JST).date()
 
 
 def load_calendar(ics_path: Path) -> Calendar:
@@ -23,72 +28,7 @@ def load_calendar(ics_path: Path) -> Calendar:
     return Calendar.from_ical(data)
 
 
-def to_tz(dt_obj, tz):
-    """Convert an ical dt object (date or datetime) to tz-aware datetime in tz.
-
-    - date: interpret as 00:00 in tz
-    - naive datetime: interpret as time already in tz (JST) and localize
-    - tz-aware datetime: convert to tz
-    """
-    if isinstance(dt_obj, datetime):
-        if dt_obj.tzinfo is None:
-            # 依頼: naive は JST とみなす
-            return tz.localize(dt_obj)
-        return dt_obj.astimezone(tz)
-    elif isinstance(dt_obj, date):
-        # 終日: その日の 00:00（inclusive）。
-        return tz.localize(datetime(dt_obj.year, dt_obj.month, dt_obj.day))
-    else:
-        raise TypeError(f"Unsupported dt type: {type(dt_obj)}")
-
-
-def event_time_range_jst(vevent):
-    dtstart_prop = vevent.get("dtstart")
-    if dtstart_prop is None:
-        return None
-    dtstart = dtstart_prop.dt
-    dtend_prop = vevent.get("dtend")
-    dtend = dtend_prop.dt if dtend_prop is not None else None
-
-    # JSTへ変換（ここでは終了未指定時の補完は行わない）
-    start_jst = to_tz(dtstart, JST)
-    end_jst = to_tz(dtend, JST) if dtend is not None else None
-
-    # allday_like: DTSTART/DTEND のいずれかが日付のみの場合
-    is_date_start = isinstance(dtstart, date) and not isinstance(dtstart, datetime)
-    is_date_end = isinstance(dtend, date) and not isinstance(dtend, datetime) if dtend is not None else False
-    allday_like = is_date_start or is_date_end
-
-    return start_jst, end_jst, allday_like
-
-
-def normalize_event(start_jst: datetime, end_jst, allday_like: bool):
-    """Ensure non-zero duration and tz-aware JST datetimes.
-
-    - allday_like True (VALUE=DATEを含む) → end<=start or None は +1日
-    - それ以外（時刻あり） → end<=start or None は +1時間
-    Returns (start, end, normalized_flag)
-    """
-    # ensure tz
-    def ensure_jst(dt):
-        if dt is None:
-            return None
-        if dt.tzinfo is None:
-            return JST.localize(dt)
-        return dt.astimezone(JST)
-
-    s = ensure_jst(start_jst)
-    e = ensure_jst(end_jst)
-    normalized = False
-    if allday_like:
-        if e is None or e <= s:
-            e = s + timedelta(days=1)
-            normalized = True
-    else:
-        if e is None or e <= s:
-            e = s + timedelta(hours=1)
-            normalized = True
-    return s, e, normalized
+# (旧ロジック to_tz/event_time_range_jst/normalize_event は ZoneInfo/JSTベースの as_jst_range へ統合)
 
 
 def get_env_bool(name: str, default: bool) -> bool:
@@ -158,15 +98,58 @@ def shape_memo(desc: str, max_len: int, allday_like: bool) -> str:
     return s
 
 
+def as_jst_range(vevent):
+    """
+    vevent から JST の (start, end, allday_like, normalized) を作る。
+    - 終日（date型を含む）: start_date 〜 end_date(翌日00:00) 相当
+    - 時間あり: tz-aware → JSTへ変換 / naive → JST付与
+    - end が未指定/ゼロ長のときは、終日なら+1日、時刻ありなら+1時間で補完
+    """
+    dtstart_prop = vevent.get("dtstart")
+    if dtstart_prop is None:
+        return None
+    dtstart = dtstart_prop.dt
+    dtend_prop = vevent.get("dtend")
+    dtend = dtend_prop.dt if dtend_prop is not None else None
+
+    is_date_start = isinstance(dtstart, date) and not isinstance(dtstart, datetime)
+    is_date_end = isinstance(dtend, date) and not isinstance(dtend, datetime) if dtend is not None else False
+    allday_like = is_date_start or is_date_end
+
+    def to_jst(dt_obj):
+        if isinstance(dt_obj, datetime):
+            if dt_obj.tzinfo is None:
+                return dt_obj.replace(tzinfo=JST)
+            return dt_obj.astimezone(JST)
+        elif isinstance(dt_obj, date):
+            return datetime(dt_obj.year, dt_obj.month, dt_obj.day, 0, 0, tzinfo=JST)
+        else:
+            raise TypeError(f"Unsupported dt type: {type(dt_obj)}")
+
+    s = to_jst(dtstart)
+    e = to_jst(dtend) if dtend is not None else None
+
+    normalized = False
+    if allday_like:
+        if e is None or e <= s:
+            e = s + timedelta(days=1)
+            normalized = True
+    else:
+        if e is None or e <= s:
+            e = s + timedelta(hours=1)
+            normalized = True
+    return s, e, allday_like, normalized
+
+
 def overlaps_today(start_jst: datetime, end_jst: datetime, today_jst: date) -> bool:
-    # 今日 00:00 ～ 明日 00:00 の半開区間と少しでも重なるか
-    day_start = JST.localize(datetime.combine(today_jst, time(0, 0, 0)))
+    # 今日 00:00 ～ 明日 00:00 の半開区間と少しでも重なるか（JST）
+    day_start = datetime.combine(today_jst, time(0, 0, 0, tzinfo=JST))
     day_end = day_start + timedelta(days=1)
-    return not (end_jst <= day_start or start_jst >= day_end)
+    return (start_jst < day_end) and (end_jst > day_start)
 
 
 def clipped_range_for_today(start_jst: datetime, end_jst: datetime, today_jst: date):
-    day_start = JST.localize(datetime.combine(today_jst, time(0, 0, 0)))
+    day_start = datetime.combine(today_jst, time(0, 0, 0, tzinfo=JST))
     day_end = day_start + timedelta(days=1)
     s = max(start_jst, day_start)
     e = min(end_jst, day_end)
@@ -183,11 +166,10 @@ def format_events_for_today(cal: Calendar, today_jst: date):
     normalized_count = 0
     for vevent in cal.walk("vevent"):
         total += 1
-        times = event_time_range_jst(vevent)
-        if times is None:
+        rng = as_jst_range(vevent)
+        if rng is None:
             continue
-        start_jst, end_jst, allday_like = times
-        start_jst, end_jst, did_norm = normalize_event(start_jst, end_jst, allday_like)
+        start_jst, end_jst, allday_like, did_norm = rng
         if did_norm:
             normalized_count += 1
         if not overlaps_today(start_jst, end_jst, today_jst):
@@ -346,23 +328,20 @@ def main():
     ics_path = Path("data/timetree.ics")
     if args.dump:
         cal = load_calendar(ics_path)
-        today = datetime.now(JST).date()
+        today = today_jst()
         # Dump all events (max 200)
         total = 0
         matched = 0
         normalized_count = 0
-        day_start = JST.localize(datetime.combine(today, time(0, 0, 0)))
-        day_end = day_start + timedelta(days=1)
         for i, vevent in enumerate(cal.walk("vevent")):
             total += 1
-            times = event_time_range_jst(vevent)
-            if not times:
+            rng = as_jst_range(vevent)
+            if not rng:
                 continue
-            s, e, allday_like = times
-            s, e, did_norm = normalize_event(s, e, allday_like)
+            s, e, allday_like, did_norm = rng
             if did_norm:
                 normalized_count += 1
-            if not (e <= day_start or s >= day_end):
+            if overlaps_today(s, e, today):
                 matched += 1
             summary = str(vevent.get("summary") or "(無題)").replace("\n", " ")
             if i < 200:
@@ -373,7 +352,7 @@ def main():
 
     if args.test_message:
         # テストでも整形を使い、1件のダミーイベントとして送信
-        today = datetime.now(JST).date()
+        today = today_jst()
         weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
         header = f"【本日の予定 {today.strftime('%Y-%m-%d')}（{weekdays_jp[today.weekday()]}） 全1件】"
         when = datetime.now(JST).strftime('%H:%M')
@@ -385,7 +364,7 @@ def main():
         ok = send_messages(header, event_msgs, [args.test_message])
     else:
         cal = load_calendar(ics_path)
-        today = datetime.now(JST).date()
+        today = today_jst()
         header, event_msgs = format_events_for_today(cal, today)
         ok = send_messages(header, event_msgs)
     sys.exit(0 if ok else 1)

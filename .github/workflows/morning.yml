@@ -24,8 +24,9 @@ on:
 
 jobs:
   notify:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, morning-timetree]
     env:
+      TZ: Asia/Tokyo
       FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
     steps:
       - uses: actions/checkout@v4
