@@ -20,6 +20,23 @@ def today_jst() -> date:
     return datetime.now(JST).date()
 
 
+def get_today_range_jst(now: datetime | None = None):
+    """
+    Return (day_start, day_end) for "today" in JST as tz-aware datetimes.
+    day_start is today 00:00 JST, day_end is tomorrow 00:00 JST.
+    """
+    if now is None:
+        now = datetime.now(JST)
+    else:
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=JST)
+        else:
+            now = now.astimezone(JST)
+    day_start = datetime(now.year, now.month, now.day, 0, 0, tzinfo=JST)
+    day_end = day_start + timedelta(days=1)
+    return day_start, day_end
+
+
 def load_calendar(ics_path: Path) -> Calendar:
     if not ics_path.exists():
         print(f"ICSが見つかりません: {ics_path}", file=sys.stderr)
@@ -98,17 +115,20 @@ def shape_memo(desc: str, max_len: int, allday_like: bool) -> str:
     return s
 
 
-def as_jst_range(vevent):
+def normalize_event_to_jst(vevent):
     """
-    vevent から JST の (start, end, allday_like, normalized) を作る。
-    - 終日（date型を含む）: start_date 〜 end_date(翌日00:00) 相当
-    - 時間あり: tz-aware → JSTへ変換 / naive → JST付与
-    - end が未指定/ゼロ長のときは、終日なら+1日、時刻ありなら+1時間で補完
+    Normalize VEVENT's DTSTART/DTEND into JST datetimes.
+
+    Returns: (start_jst, end_jst, allday_like, fixed)
+      - start_jst, end_jst: tz-aware JST datetime objects, or None if invalid.
+      - allday_like: True if DTSTART/DTEND looked like date-only (all-day style)
+      - fixed: True if end was missing/zero-length and was auto-extended
     """
     dtstart_prop = vevent.get("dtstart")
     if dtstart_prop is None:
-        return None
+        return None, None, False, False
     dtstart = dtstart_prop.dt
+
     dtend_prop = vevent.get("dtend")
     dtend = dtend_prop.dt if dtend_prop is not None else None
 
@@ -124,36 +144,26 @@ def as_jst_range(vevent):
         elif isinstance(dt_obj, date):
             return datetime(dt_obj.year, dt_obj.month, dt_obj.day, 0, 0, tzinfo=JST)
         else:
-            raise TypeError(f"Unsupported dt type: {type(dt_obj)}")
+            return None
 
     s = to_jst(dtstart)
     e = to_jst(dtend) if dtend is not None else None
+    if s is None:
+        return None, None, allday_like, False
 
-    normalized = False
-    if allday_like:
-        if e is None or e <= s:
-            e = s + timedelta(days=1)
-            normalized = True
-    else:
-        if e is None or e <= s:
-            e = s + timedelta(hours=1)
-            normalized = True
-    return s, e, allday_like, normalized
+    fixed = False
+    if e is None or e <= s:
+        e = s + (timedelta(days=1) if allday_like else timedelta(hours=1))
+        fixed = True
+    return s, e, allday_like, fixed
 
 
-def overlaps_today(start_jst: datetime, end_jst: datetime, today_jst: date) -> bool:
-    # 今日 00:00 ～ 明日 00:00 の半開区間と少しでも重なるか（JST）
-    day_start = datetime.combine(today_jst, time(0, 0, 0, tzinfo=JST))
-    day_end = day_start + timedelta(days=1)
-    return (start_jst < day_end) and (end_jst > day_start)
+def overlaps_today_jst(start: datetime, end: datetime, day_start: datetime, day_end: datetime) -> bool:
+    """Return True if [start, end) and [day_start, day_end) overlap in JST."""
+    return start < day_end and end > day_start
 
 
-def clipped_range_for_today(start_jst: datetime, end_jst: datetime, today_jst: date):
-    day_start = datetime.combine(today_jst, time(0, 0, 0, tzinfo=JST))
-    day_end = day_start + timedelta(days=1)
-    s = max(start_jst, day_start)
-    e = min(end_jst, day_end)
-    return s, e
+# 旧 overlaps/clipped は使用しない（JSTヘルパーへ統合）
 
 
 def format_events_for_today(cal: Calendar, today_jst: date):
@@ -164,19 +174,20 @@ def format_events_for_today(cal: Calendar, today_jst: date):
     previews = []
     total = 0
     normalized_count = 0
+    day_start, day_end = get_today_range_jst()
     for vevent in cal.walk("vevent"):
         total += 1
-        rng = as_jst_range(vevent)
-        if rng is None:
+        s, e, allday_like, fixed = normalize_event_to_jst(vevent)
+        if s is None or e is None:
             continue
-        start_jst, end_jst, allday_like, did_norm = rng
-        if did_norm:
+        if fixed:
             normalized_count += 1
-        if not overlaps_today(start_jst, end_jst, today_jst):
+        if not overlaps_today_jst(s, e, day_start, day_end):
             continue
 
         # 表示時間は今日の範囲でクリップ
-        disp_start, disp_end = clipped_range_for_today(start_jst, end_jst, today_jst)
+        disp_start = s if s >= day_start else day_start
+        disp_end = e if e <= day_end else day_end
 
         summary = vevent.get("summary")
         title = str(summary) if summary is not None else "(無題)"
@@ -329,23 +340,25 @@ def main():
     if args.dump:
         cal = load_calendar(ics_path)
         today = today_jst()
+        day_start, day_end = get_today_range_jst()
         # Dump all events (max 200)
         total = 0
         matched = 0
         normalized_count = 0
+        print(f"today_range_jst: {day_start.isoformat()} .. {day_end.isoformat()}")
         for i, vevent in enumerate(cal.walk("vevent")):
             total += 1
-            rng = as_jst_range(vevent)
-            if not rng:
+            s, e, allday_like, fixed = normalize_event_to_jst(vevent)
+            if s is None or e is None:
                 continue
-            s, e, allday_like, did_norm = rng
-            if did_norm:
+            if fixed:
                 normalized_count += 1
-            if overlaps_today(s, e, today):
+            overlaps = overlaps_today_jst(s, e, day_start, day_end)
+            if overlaps:
                 matched += 1
             summary = str(vevent.get("summary") or "(無題)").replace("\n", " ")
             if i < 200:
-                print(f"{s.isoformat()}, {e.isoformat()}, {bool(allday_like)}, {summary}")
+                print(f"{s.isoformat()}, {e.isoformat()}, {bool(allday_like)}, {overlaps}, {summary}")
         print(f"ゼロ長さ補正した件数: {normalized_count}")
         print(f"totals: all={total}, matched={matched}")
         sys.exit(0)
