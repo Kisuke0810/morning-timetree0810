@@ -65,11 +65,34 @@ jobs:
           FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
         run: |
           mkdir -p data
+          # JST 今日±30日をデフォルト期間として明示指定
+          # today は TZ=Asia/Tokyo で解釈（ジョブenvでTZ指定済み）
+          today=$(date +%Y-%m-%d)
+          start=$(date -d "$today -30 days" +%Y-%m-%dT00:00:00+09:00)
+          end=$(date -d "$today +31 days" +%Y-%m-%dT00:00:00+09:00)
+          echo "Export window(JST): $start .. $end"
+
+          CAL_OPT=""
           if [ -n "${TIMETREE_CAL_CODE}" ]; then
-            timetree-exporter -o data/timetree.ics -e "${TIMETREE_EMAIL}" -c "${TIMETREE_CAL_CODE}" <<< "${TIMETREE_PASSWORD}"
-          else
-            timetree-exporter -o data/timetree.ics -e "${TIMETREE_EMAIL}" <<< "${TIMETREE_PASSWORD}"
+            CAL_OPT="-c \"${TIMETREE_CAL_CODE}\""
           fi
+
+          # ヘルプから期間指定オプションを動的に検出
+          HELP="$(timetree-exporter --help 2>/dev/null || true)"
+          PERIOD_OPTS=""
+          if echo "$HELP" | grep -q -- "--start" && echo "$HELP" | grep -q -- "--end"; then
+            PERIOD_OPTS="--start \"$start\" --end \"$end\""
+          elif echo "$HELP" | grep -q -- "--from" && echo "$HELP" | grep -q -- "--to"; then
+            PERIOD_OPTS="--from \"$start\" --to \"$end\""
+          elif echo "$HELP" | grep -q -- "--days-back" && echo "$HELP" | grep -q -- "--days-forward"; then
+            PERIOD_OPTS="--days-back 30 --days-forward 30"
+          else
+            echo "[warn] timetree-exporter に期間指定オプションが見つかりませんでした。デフォルト範囲を使用します。"
+          fi
+
+          # シェルの引数展開のため eval を利用
+          # shellcheck disable=SC2086
+          eval timetree-exporter -o data/timetree.ics -e "\"${TIMETREE_EMAIL}\"" $CAL_OPT $PERIOD_OPTS <<< "${TIMETREE_PASSWORD}"
 
       - name: Debug ICS head
         if: ${{ steps.cache.outputs.cache-hit != 'true' || github.event.inputs.dump == 'true' || github.event.inputs.test_message != '' }}
