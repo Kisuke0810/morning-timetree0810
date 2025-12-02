@@ -219,7 +219,8 @@ def format_events_for_today(cal: Calendar, today_jst: date):
             lines.append(memo)
         line_joined = "\n".join(lines)
 
-        items.append((disp_start, line_joined))
+        # 1 VEVENT = 1件。重複排除は行わず、そのまま蓄積。
+        items.append((disp_start, title, line_joined))
         token = "終日" if allday_like else disp_start.strftime('%H:%M')
         previews.append(f"{token}:{title}")
 
@@ -231,15 +232,15 @@ def format_events_for_today(cal: Calendar, today_jst: date):
         header_msg = f"【{header_plain} 全0件】"
         return header_msg, []
 
-    # 開始時刻でソート
-    items.sort(key=lambda x: x[0])
+    # 開始時刻→タイトルでソート（同時刻の並びが安定するように）
+    items.sort(key=lambda x: (x[0], x[1]))
     # プレビュー（先頭3件）
     preview = " / ".join(previews[:3])
     if preview:
         print(f"抽出プレビュー: {preview}")
-    body = "\n".join(line for _, line in items)
+    body = "\n".join(line for _, _, line in items)
     header_msg = f"【{header_plain} 全{matched}件】"
-    event_msgs = [line for _, line in items]
+    event_msgs = [line for _, _, line in items]
     return header_msg, event_msgs
 
 
