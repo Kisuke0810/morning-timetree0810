@@ -33,6 +33,7 @@ jobs:
       SENT_NAMESPACE: private
       ICS_PATH: data/timetree_private.ics
       SEND_EMPTY: 'true'
+      CAL_LABEL: "プライベート"
     steps:
       - uses: actions/checkout@v4
 

@@ -32,6 +32,7 @@ jobs:
       SENT_NAMESPACE: course
       ICS_PATH: data/timetree.ics
       SEND_EMPTY: 'true'
+      CAL_LABEL: "講座"
     steps:
       - uses: actions/checkout@v4
 

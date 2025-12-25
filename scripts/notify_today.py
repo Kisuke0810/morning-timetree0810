@@ -169,6 +169,8 @@ def overlaps_today_jst(start: datetime, end: datetime, day_start: datetime, day_
 def format_events_for_today(cal: Calendar, today_jst: date):
     weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
     header_plain = f"本日の予定 {today_jst.strftime('%Y-%m-%d')}（{weekdays_jp[today_jst.weekday()]}）"
+    label = os.getenv("CAL_LABEL", "").strip()
+    prefix = f"{label}｜" if label else ""
 
     items = []
     previews = []
@@ -229,7 +231,7 @@ def format_events_for_today(cal: Calendar, today_jst: date):
     print(f"デバッグ: today={today_jst.strftime('%Y-%m-%d')}, events_total={total}, normalized={normalized_count}, matched={matched}")
 
     if not items:
-        header_msg = f"【{header_plain} 全0件】"
+        header_msg = f"【{prefix}{header_plain} 全0件】"
         return header_msg, []
 
     # 開始時刻→タイトルでソート（同時刻の並びが安定するように）
@@ -239,7 +241,7 @@ def format_events_for_today(cal: Calendar, today_jst: date):
     if preview:
         print(f"抽出プレビュー: {preview}")
     body = "\n".join(line for _, _, line in items)
-    header_msg = f"【{header_plain} 全{matched}件】"
+    header_msg = f"【{prefix}{header_plain} 全{matched}件】"
     event_msgs = [line for _, _, line in items]
     return header_msg, event_msgs
 
@@ -389,7 +391,9 @@ def main():
         matched = len(event_msgs)
         if matched == 0:
             if send_empty:
-                empty_msg = "【今日の予定】\n予定はありません"
+                label = os.getenv("CAL_LABEL", "").strip()
+                prefix = f"{label}｜" if label else ""
+                empty_msg = f"【{prefix}今日の予定】\n予定はありません"
                 status, ok, _ = send_one(clip_message(empty_msg))
                 sys.exit(0 if ok else 1)
             else:
