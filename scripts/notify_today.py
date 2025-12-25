@@ -255,7 +255,7 @@ def send_push(message: str):
     payload = {"to": to, "messages": [{"type": "text", "text": message}]}
     resp = requests.post(url, headers=headers, json=payload, timeout=15)
     ok = 200 <= resp.status_code < 300
-    return resp.status_code, ok, (resp.text[:200] if resp.text else "")
+    return resp.status_code, ok, (resp.text[:500] if resp.text else "")
 
 
 def send_broadcast(message: str):
@@ -268,7 +268,7 @@ def send_broadcast(message: str):
     payload = {"messages": [{"type": "text", "text": message}]}
     resp = requests.post(url, headers=headers, json=payload, timeout=15)
     ok = 200 <= resp.status_code < 300
-    return resp.status_code, ok, (resp.text[:200] if resp.text else "")
+    return resp.status_code, ok, (resp.text[:500] if resp.text else "")
 
 
 def clip_message(message: str) -> str:
@@ -284,10 +284,15 @@ def send_one(message: str):
     if use_broadcast:
         status, ok, summary = send_broadcast(message)
         route = "broadcast"
+        recipient = "broadcast"
     else:
         status, ok, summary = send_push(message)
         route = "push"
-    print(f"LINE送信 route={route} status={status} summary={summary}")
+        recipient = os.getenv("LINE_TO") or "(unset)"
+    print(f"LINE送信 route={route} to={recipient} status={status} summary={summary}")
+    if status >= 300:
+        print(f"LINE error route={route} to={recipient} status={status} body={summary}", file=sys.stderr)
+        sys.exit(1)
     return status, ok, summary
 
 
@@ -337,7 +342,7 @@ def main():
     parser.add_argument("--dump", action="store_true", help="全イベントのJST換算をCSVで表示（送信しない）")
     args = parser.parse_args()
 
-    ics_path = Path("data/timetree.ics")
+    ics_path = Path(os.getenv("ICS_PATH", "data/timetree.ics"))
     if args.dump:
         cal = load_calendar(ics_path)
         today = today_jst()
@@ -380,6 +385,16 @@ def main():
         cal = load_calendar(ics_path)
         today = today_jst()
         header, event_msgs = format_events_for_today(cal, today)
+        send_empty = os.getenv("SEND_EMPTY", "false").strip().lower() == "true"
+        matched = len(event_msgs)
+        if matched == 0:
+            if send_empty:
+                empty_msg = "【今日の予定】\n予定はありません"
+                status, ok, _ = send_one(clip_message(empty_msg))
+                sys.exit(0 if ok else 1)
+            else:
+                print("no events today; skip sending")
+                sys.exit(0)
         ok = send_messages(header, event_msgs)
     sys.exit(0 if ok else 1)
 

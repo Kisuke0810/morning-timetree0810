@@ -1,8 +1,9 @@
-name: Morning TimeTree → LINE
+name: Morning TimeTree → LINE (Private)
+
 on:
   schedule:
-    - cron: "0 1 * * *"     # JST 10:00（本命）
-    - cron: "5 1 * * *"     # JST 10:05（バックアップ）
+    - cron: "1 1 * * *"     # JST 10:01（少しずらす）
+    - cron: "6 1 * * *"     # JST 10:06（バックアップ）
   workflow_dispatch:
     inputs:
       test_message:
@@ -20,7 +21,7 @@ on:
         default: false
 
 concurrency:
-  group: morning-${{ github.workflow }}-${{ github.ref }}
+  group: morning-private-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,8 +30,8 @@ jobs:
     env:
       TZ: Asia/Tokyo
       FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
-      SENT_NAMESPACE: course
-      ICS_PATH: data/timetree.ics
+      SENT_NAMESPACE: private
+      ICS_PATH: data/timetree_private.ics
       SEND_EMPTY: 'true'
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +65,7 @@ jobs:
         env:
           TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
           TIMETREE_PASSWORD: ${{ secrets.TIMETREE_PASSWORD }}
-          TIMETREE_CAL_CODE: ${{ secrets.TIMETREE_CAL_CODE }} # 任意
+          TIMETREE_CAL_CODE: ${{ secrets.TIMETREE_CAL_CODE_PRIVATE }} # Private用
           FAIL_NOTIFY: ${{ secrets.FAIL_NOTIFY }}
         run: |
           mkdir -p data
@@ -99,14 +100,7 @@ jobs:
 
       - name: Verify ICS generated
         run: |
-          echo "ICS_PATH=${ICS_PATH}"
-          ls -la data || true
-          test -s "${ICS_PATH}" || (echo "::error::${ICS_PATH} not generated"; exit 1)
-
-      - name: Debug ICS head
-        run: |
-          ls -l data || true
-          head -n 40 "${ICS_PATH}" || true
+          test -s "${ICS_PATH}" || (echo "::error::ICS not generated"; exit 1)
 
       - name: Send LINE message
         id: send
@@ -133,37 +127,26 @@ jobs:
             fi
           fi
           if [ "${DUMP}" = "true" ]; then
-            echo "### TimeTree dump (先頭200行)" >> "$GITHUB_STEP_SUMMARY"
-            python scripts/notify_today.py --dump | tee dump.csv
-            head -n 200 dump.csv >> "$GITHUB_STEP_SUMMARY"
+            python scripts/notify_today.py --dump | sed -n '1,5p'
           elif [ -n "${TEST_MESSAGE}" ]; then
             python scripts/notify_today.py --test "${TEST_MESSAGE}"
           else
             python scripts/notify_today.py
-            echo "sent=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Already sent today
         if: ${{ steps.cache.outputs.cache-hit == 'true' && github.event_name == 'schedule' && github.event.inputs.force != 'true' }}
         run: echo "本日は既に送信済み（${{ steps.jst.outputs.date }}）。スキップします。"
 
-      - name: Upload ICS artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: timetree-ics-${{ github.run_id }}
-          path: ${{ env.ICS_PATH }}
-          if-no-files-found: warn
-
       - name: Write sent marker
-        if: ${{ steps.send.outputs.sent == 'true' }}
+        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' && github.event.inputs.dump != 'true' && github.event.inputs.test_message == '' }}
         env:
           JST_DATE: ${{ steps.jst.outputs.date }}
         run: echo "sent on ${JST_DATE}" > ".sent-marker-${SENT_NAMESPACE}"
 
       - name: Save sent cache
-        if: ${{ steps.send.outputs.sent == 'true' }}
-        uses: actions/cache/save@v4
+        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' && github.event.inputs.dump != 'true' && github.event.inputs.test_message == '' }}
+        uses: actions/cache@v4
         with:
           path: .sent-marker-${{ env.SENT_NAMESPACE }}
           key: sent-${{ env.SENT_NAMESPACE }}-${{ steps.jst.outputs.date }}
@@ -190,7 +173,22 @@ jobs:
           step="unknown"
           if [ "${STEP_EXPORT}" = "failure" ]; then step="export"; fi
           if [ "${STEP_SEND}" = "failure" ]; then step="send"; fi
-          ALERT_MESSAGE="⚠️ Morning TimeTree 配信失敗（step=${step}）
+          ALERT_MESSAGE="⚠️ Morning TimeTree(Private) 配信失敗（step=${step}）
           ${RUN_URL}"
           export ALERT_MESSAGE
           python scripts/line_alert.py
+
+      # Security: do not leak details in logs/artifacts for Private
+      - name: Debug ICS head (disabled)
+        if: false
+        run: |
+          ls -l data || true
+          head -n 10 "${ICS_PATH}" || true
+
+      - name: Upload ICS artifact (disabled)
+        if: false
+        uses: actions/upload-artifact@v4
+        with:
+          name: timetree-ics-private-${{ github.run_id }}
+          path: ${{ env.ICS_PATH }}
+          if-no-files-found: warn
